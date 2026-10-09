@@ -155,6 +155,16 @@ impl Catalog {
         (c, errors)
     }
 
+    /// 語言包：把 `pack` 疊在這份目錄上。同一個鍵以語言包為準，語言包沒有的條目保留內建譯文。
+    pub fn overlay(&mut self, pack: Catalog) {
+        self.plain.extend(pack.plain);
+        for (context, entries) in pack.contextual {
+            self.contextual.entry(context).or_default().extend(entries);
+        }
+        self.ids.extend(pack.ids);
+        self.plurals.extend(pack.plurals);
+    }
+
     pub fn plain(&self, s: &str) -> Option<&str> {
         self.plain.get(s).map(String::as_str)
     }

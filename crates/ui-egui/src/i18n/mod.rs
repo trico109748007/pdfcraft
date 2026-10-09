@@ -116,13 +116,48 @@ impl LangInfo {
 
     fn catalog(&self) -> &Catalog {
         self.catalog.get_or_init(|| {
-            let (catalog, errors) = Catalog::parse(self.source, self.plural_forms());
+            let forms = self.plural_forms();
+            let (mut catalog, errors) = Catalog::parse(self.source, forms);
             for error in errors {
                 log::warn!("{} interface catalog: {error}; that entry shows in English", self.code);
+            }
+            // 語言包：外部 <code>.tsv 只需列出要改或要補的條目，其餘沿用內建譯文。
+            if let Some((path, text)) = language_pack(self.code) {
+                let (pack, errors) = Catalog::parse(&text, forms);
+                for error in errors {
+                    log::warn!("{} language pack {}: {error}; that entry keeps the built-in text", self.code, path.display());
+                }
+                log::info!("{} language pack loaded from {}", self.code, path.display());
+                catalog.overlay(pack);
             }
             catalog
         })
     }
+}
+
+/// 外部語言包 `<code>.tsv` 的路徑與內容：先看環境變數 `PDFCRAFT_LANG_DIR` 指定的資料夾，
+/// 否則看執行檔旁的 `lang` 資料夾。檔案不存在或讀不到就回傳 `None`（只用內建譯文）。
+#[cfg(not(target_arch = "wasm32"))]
+fn language_pack(code: &str) -> Option<(std::path::PathBuf, String)> {
+    // 測試一律只用內建目錄，不受開發者電腦上的語言包影響。
+    if cfg!(test) {
+        return None;
+    }
+    let dir = match std::env::var_os("PDFCRAFT_LANG_DIR").filter(|d| !d.is_empty()) {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => std::env::current_exe().ok()?.parent()?.join("lang"),
+    };
+    let path = dir.join(format!("{code}.tsv"));
+    let text = std::fs::read_to_string(&path).ok()?;
+    // 有些 Windows 編輯器會在 UTF-8 檔頭加 BOM，去掉以免第一行被當成格式錯誤。
+    let text = text.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(text);
+    Some((path, text))
+}
+
+/// 網頁版沒有檔案系統，不支援語言包。
+#[cfg(target_arch = "wasm32")]
+fn language_pack(_code: &str) -> Option<(std::path::PathBuf, String)> {
+    None
 }
 
 /// A language the UI can be shown in (a handle into [`LANGUAGES`]).
@@ -528,6 +563,22 @@ mod tests {
         let (catalog, errors) = Catalog::parse("\tFile\tファイル\n\tFile\t別\n", 1);
         assert!(errors.len() == 1 && errors[0].contains("line 2: duplicate"), "{errors:?}");
         assert_eq!(catalog.plain("File"), Some("ファイル"), "the first entry wins");
+    }
+
+    #[test]
+    fn language_pack_overlays_built_in_entries() {
+        let (mut built_in, errors) =
+            Catalog::parse("\tSave\t保存\n\tOpen\t打開\n@id\tfile.save\t保存\nmenu\tWindows\t窗口\n@plural\t{n} file|{n} files\t{n} 個文件\n", 1);
+        assert!(errors.is_empty(), "{errors:?}");
+        let (pack, errors) = Catalog::parse("\tSave\t儲存\n\tPrint…\t列印…\nmenu\tWindows\t視窗\n@plural\t{n} file|{n} files\t{n} 個檔案\n", 1);
+        assert!(errors.is_empty(), "{errors:?}");
+        built_in.overlay(pack);
+        assert_eq!(built_in.plain("Save"), Some("儲存"), "the pack replaces a built-in entry");
+        assert_eq!(built_in.plain("Open"), Some("打開"), "entries the pack lacks keep the built-in text");
+        assert_eq!(built_in.plain("Print…"), Some("列印…"), "the pack adds missing entries");
+        assert_eq!(built_in.id("file.save"), Some("保存"));
+        assert_eq!(built_in.contextual("menu", "Windows"), Some("視窗"));
+        assert_eq!(built_in.plural("{n} file", "{n} files", 0), Some("{n} 個檔案"));
     }
 
     #[test]
