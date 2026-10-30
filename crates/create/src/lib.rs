@@ -269,7 +269,7 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
             0xEE if seg.starts_with(b"Adobe") => adobe = true,
             // APP2 ICC profile, possibly split over several chunks.
             0xE2 => {
-                if let Some(([seq, count], data)) = seg.strip_prefix(b"ICC_PROFILE\0").and_then(|r| r.split_first_chunk::<2>()) {
+                if let Some(([seq, count], data)) = seg.strip_prefix(b"ICC_PROFILE\0").and_then(<[u8]>::split_first_chunk::<2>) {
                     icc_chunks.push((*seq, *count, data));
                 }
             }
@@ -562,7 +562,7 @@ fn embed(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, Creat
     } else if is_tiff(bytes) {
         tiff_pages(name, bytes, wanted)
     } else if bytes.starts_with(b"BM") {
-        Ok(vec![decoded(name, bytes, image::ImageFormat::Bmp)?])
+        Ok(vec![decoded(name, &pdfcraft_xfa::image::bmp_with_pixel_offset(bytes), image::ImageFormat::Bmp)?])
     } else if is_gif(bytes) {
         Ok(vec![decoded(name, bytes, image::ImageFormat::Gif)?])
     } else if bytes.starts_with(JP2_SIGNATURE) || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
